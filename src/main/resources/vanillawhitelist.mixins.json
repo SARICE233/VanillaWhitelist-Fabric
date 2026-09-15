@@ -1,0 +1,15 @@
+{
+	"required": true,
+	"package": "com.vanillawhitelist.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"VanillaWhitelistMixin",
+		"AdvancementMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	},
+	"overwrites": {
+		"requireAnnotations": true
+	}
+}

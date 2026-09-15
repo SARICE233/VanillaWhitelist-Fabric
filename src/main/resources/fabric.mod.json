@@ -1,0 +1,31 @@
+{
+	"schemaVersion": 1,
+	"id": "vanillawhitelist",
+	"version": "${version}",
+	"name": "VanillaWhitelist",
+	"description": "VanillaWhitelist 服务器白名单管理模组（WebSocket 与网站集成）",
+	"authors": [
+		"VanillaWhitelist Team"
+	],
+	"contact": {
+		"homepage": "https://github.com/SARICE233/VanillaWhitelist",
+		"sources": "https://github.com/SARICE233/VanillaWhitelist"
+	},
+	"license": "MIT",
+	"icon": "assets/vanillawhitelist/icon.png",
+	"environment": "server",
+	"entrypoints": {
+		"main": [
+			"com.vanillawhitelist.VanillaWhitelistMod"
+		]
+	},
+	"mixins": [
+		"vanillawhitelist.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~${minecraft_version}",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VanillaWhitelist — WebSocket 测试工具</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --panel: #16213e;
+    --border: #0f3460;
+    --accent: #e94560;
+    --text: #eee;
+    --dim: #888;
+    --green: #4ade80;
+    --yellow: #facc15;
+    --red: #f87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    height: 100vh;
+  }
+  /* ── 左侧控制面板 ── */
+  #sidebar {
+    width: 320px;
+    background: var(--panel);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border-right: 1px solid var(--border);
+  }
+  #sidebar h1 { font-size: 18px; display: flex; align-items: center; gap: 8px; }
+  #sidebar h1 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); display: inline-block; }
+  #sidebar h1 .dot.connected { background: var(--green); }
+  label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  input, button {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+  }
+  #btn-connect { background: var(--accent); border-color: var(--accent); }
+  #btn-connect:hover { opacity: 0.85; }
+  #btn-connect.disconnect { background: var(--yellow); border-color: var(--yellow); color: #111; }
+  #btn-send { background: var(--border); border-color: var(--border); }
+  #btn-send:hover { background: #1a4a8a; }
+  .flex-row { display: flex; gap: 8px; }
+  .flex-row button { flex: 1; font-size: 12px; padding: 8px; }
+  #status-bar {
+    font-size: 12px;
+    color: var(--dim);
+    padding: 8px 12px;
+    background: var(--bg);
+    border-radius: 6px;
+    text-align: center;
+  }
+  #status-bar.connected { color: var(--green); }
+  /* ── 右侧日志区 ── */
+  #main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #log-header {
+    padding: 16px 20px;
+    font-size: 13px;
+    color: var(--dim);
+    display: flex;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .log-entry .ts { color: var(--dim); margin-right: 8px; }
+  .log-entry.in  .dir { color: var(--yellow); }
+  .log-entry.out .dir { color: var(--green); }
+  .log-entry.err .dir { color: var(--red); }
+  .log-entry .preview { white-space: pre-wrap; word-break: break-all; }
+  /* ── 消息类型统计 ── */
+  #stats {
+    display: flex;
+    gap: 12px;
+    padding: 10px 20px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--dim);
+    flex-wrap: wrap;
+  }
+  #stats span { background: var(--panel); padding: 4px 10px; border-radius: 4px; }
+  #stats .count { color: var(--accent); font-weight: 600; }
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ 左侧控制面板 ═══════════════ -->
+<div id="sidebar">
+  <h1>
+    <span class="dot" id="status-dot"></span>
+    VanillaWhitelist
+  </h1>
+
+  <div>
+    <label>服务器地址</label>
+    <input id="host" type="text" value="ws://localhost:25585" placeholder="ws://ip:port">
+  </div>
+
+  <div>
+    <label>认证密钥 (Secret)</label>
+    <input id="secret" type="password" value="change-me-to-a-random-string" placeholder="config 中的 secret">
+  </div>
+
+  <button id="btn-connect" onclick="toggleConnect()">连接服务器</button>
+
+  <div style="border-top:1px solid var(--border);padding-top:12px;">
+    <label>快速测试命令</label>
+    <div class="flex-row">
+      <button onclick="sendPing()">Ping</button>
+      <button onclick="sendWLAdd()">添加白名单</button>
+      <button onclick="sendWLRemove()">移除白名单</button>
+    </div>
+    <div style="margin-top:6px;">
+      <input id="player-name" type="text" value="Steve" placeholder="玩家名">
+    </div>
+  </div>
+
+  <div id="status-bar">未连接</div>
+</div>
+
+<!-- ═══════════════ 右侧日志区 ═══════════════ -->
+<div id="main">
+  <div id="log-header">
+    <span>📋 消息日志</span>
+    <button onclick="clearLog()" style="width:auto;padding:4px 10px;font-size:11px;">清空</button>
+  </div>
+  <div id="log">
+    <div class="log-entry"><span class="ts">--:--:--</span>等待连接...</div>
+  </div>
+  <div id="stats"></div>
+</div>
+
+<script>
+// ═══════════════ 状态 ═══════════════
+let ws = null;
+let connected = false;
+let authenticated = false;
+let msgCounts = {};
+
+// ═══════════════ 连接/断开 ═══════════════
+function toggleConnect() {
+  connected ? disconnect() : connect();
+}
+
+function connect() {
+  const host = document.getElementById('host').value.trim();
+  if (!host) return alert('请输入服务器地址');
+
+  try {
+    ws = new WebSocket(host);
+  } catch (e) {
+    return logEntry('连接失败: ' + e.message, 'err');
+  }
+
+  ws.onopen = () => {
+    connected = true;
+    authenticated = false;
+    updateUI();
+    logEntry('WebSocket 已连接，发送认证...', 'out');
+    // 自动发送认证
+    const secret = document.getElementById('secret').value.trim();
+    sendJson({
+      type: 'auth',
+      id: 'auth-' + Date.now(),
+      secret: secret
+    });
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      trackMsg(msg.type);
+      if (msg.type === 'auth_result') {
+        authenticated = msg.success;
+        logEntry(
+          '认证' + (msg.success ? '成功 ✅' : '失败 ❌ ' + (msg.error || '')),
+          msg.success ? 'in' : 'err'
+        );
+        updateUI();
+      } else {
+        // 截断长消息用于日志显示
+        const preview = JSON.stringify(msg).length > 200
+          ? JSON.stringify(msg).substring(0, 200) + '…'
+          : JSON.stringify(msg);
+        logEntry(preview, 'in');
+      }
+    } catch {
+      logEntry(e.data, 'in');
+    }
+  };
+
+  ws.onclose = (e) => {
+    connected = false;
+    authenticated = false;
+    updateUI();
+    logEntry(`连接关闭 (code=${e.code})`, 'err');
+  };
+
+  ws.onerror = () => {
+    logEntry('WebSocket 错误', 'err');
+  };
+}
+
+function disconnect() {
+  if (ws) ws.close(1000, 'User disconnected');
+}
+
+// ═══════════════ 发送消息 ═══════════════
+function sendJson(obj) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const json = JSON.stringify(obj);
+  ws.send(json);
+  logEntry(json, 'out');
+}
+
+function sendPing() {
+  sendJson({ type: 'ping' });
+}
+
+function sendWLAdd() {
+  const name = document.getElementById('player-name').value.trim();
+  if (!name) return alert('请输入玩家名');
+  sendJson({
+    type: 'whitelist_add',
+    id: 'wl-' + Date.now(),
+    player_name: name
+  });
+}
+
+function sendWLRemove() {
+  const name = document.getElementById('player-name').value.trim();
+  if (!name) return alert('请输入玩家名');
+  sendJson({
+    type: 'whitelist_remove',
+    id: 'wl-' + Date.now(),
+    player_name: name
+  });
+}
+
+// ═══════════════ UI ═══════════════
+function updateUI() {
+  const dot = document.getElementById('status-dot');
+  const btn = document.getElementById('btn-connect');
+  const bar = document.getElementById('status-bar');
+
+  dot.className = 'dot' + (connected && authenticated ? ' connected' : '');
+  btn.textContent = connected ? '断开连接' : '连接服务器';
+  btn.className = connected ? 'disconnect' : '';
+
+  if (!connected) {
+    bar.textContent = '未连接';
+    bar.className = '';
+  } else if (!authenticated) {
+    bar.textContent = '已连接 · 等待认证…';
+    bar.className = 'connected';
+  } else {
+    bar.textContent = '已连接 · 已认证';
+    bar.className = 'connected';
+  }
+
+  updateStats();
+}
+
+function logEntry(text, dir = 'in') {
+  const now = new Date();
+  const ts = now.toTimeString().substring(0, 8);
+  const log = document.getElementById('log');
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + dir;
+  div.innerHTML = `<span class="ts">${ts}</span><span class="dir">${dir === 'in' ? '←' : dir === 'out' ? '→' : '⚠'}</span> <span class="preview">${escapeHtml(text)}</span>`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function trackMsg(type) {
+  msgCounts[type] = (msgCounts[type] || 0) + 1;
+  updateStats();
+}
+
+function updateStats() {
+  const entries = Object.entries(msgCounts).sort((a, b) => b[1] - a[1]);
+  document.getElementById('stats').innerHTML = entries
+    .map(([type, count]) => `<span>${type} <span class="count">×${count}</span></span>`)
+    .join('');
+}
+
+function clearLog() {
+  document.getElementById('log').innerHTML = '';
+  msgCounts = {};
+  updateStats();
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// 回车键快捷发送
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && document.activeElement?.id === 'player-name') {
+    sendWLAdd();
+  }
+});
+</script>
+</body>
+</html>
