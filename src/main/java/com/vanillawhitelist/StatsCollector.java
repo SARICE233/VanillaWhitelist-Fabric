@@ -2,6 +2,7 @@ package com.vanillawhitelist;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -29,6 +30,12 @@ public class StatsCollector {
 	private static long uptimeSeconds() {
 		return startedAt == 0L ? 0L : (System.currentTimeMillis() - startedAt) / 1000L;
 	}
+
+	/**
+	 * 最近一次 server_stats 的完整快照。
+	 * 空服暂停期间的兜底心跳复用它，避免跨线程去读区块表 / 实体表。
+	 */
+	private static volatile String cachedServerStats = null;
 
 	/** server_stats：TPS、MSPT、内存、区块、实体、在线玩家 */
 	public static JsonObject serverStats(MinecraftServer server, VwlConfig config) {
@@ -68,7 +75,36 @@ public class StatsCollector {
 			arr.add(po);
 		}
 		o.add("players", arr);
+		cachedServerStats = o.toString();
 		return o;
+	}
+
+	/**
+	 * 服务端空置暂停期间的兜底心跳。
+	 *
+	 * 服务器连续 pause-when-empty-seconds（默认 60 秒）没有玩家时会暂停 tick，
+	 * ServerTickEvent 不再触发，定时推送会整体停摆。此时用最近一次快照做底，
+	 * 只刷新 uptime / 内存 / 在线人数 —— 这几个字段跨线程读取是安全的；
+	 * 区块数、实体数、TPS 沿用暂停前的值（暂停的空服本来就不再变化）。
+	 *
+	 * @return 心跳 JSON；还没有任何快照可用时返回 null
+	 */
+	public static String pausedHeartbeat(VwlConfig config) {
+		String cached = cachedServerStats;
+		if (cached == null) return null;
+		try {
+			JsonObject o = JsonParser.parseString(cached).getAsJsonObject();
+			o.addProperty("server_id", config.serverId);
+			o.addProperty("uptime_seconds", uptimeSeconds());
+			Runtime rt = Runtime.getRuntime();
+			o.addProperty("memory_used", (rt.totalMemory() - rt.freeMemory()) / 1048576L);
+			o.addProperty("memory_max", rt.maxMemory() / 1048576L);
+			o.addProperty("online_count", 0);
+			o.add("players", new JsonArray());
+			return o.toString();
+		} catch (Exception e) {
+			return null;
+		}
 	}
 
 	/** world_stats：每个维度一条 */
