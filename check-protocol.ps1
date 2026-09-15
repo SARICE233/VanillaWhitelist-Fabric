@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   VanillaWhitelist 三端一致性校验（发布前把关）
 
