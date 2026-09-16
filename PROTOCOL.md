@@ -86,7 +86,8 @@
 网站启动 → 连接 ws://server:25585
          → 等待 auth（10 秒内未收到则断开）
          → 校验 secret → 返回 auth_result
-         → 认证成功：先补发离线期间缓冲的消息，再立即推一次 server_stats
+         → 认证成功：先补发离线期间缓冲的消息，再立即给一次「基准快照」：
+             server_stats + player_advancements（全量）+ player_stats_batch
          → 双向通信
          → 网站断开 → 清理会话
 ```
@@ -110,7 +111,7 @@
 | 服务端 → 网站 | `server_stats` | 定时（默认 30s）+ 认证后立即一次 |
 | 服务端 → 网站 | `player_event` | 玩家加入/离开/死亡/换维度 |
 | 服务端 → 网站 | `world_stats` | 定时（默认 5min） |
-| 服务端 → 网站 | `player_stats_batch` | 定时（默认 10min） |
+| 服务端 → 网站 | `player_stats_batch` | 定时（默认 10min）+ 认证后立即一次 |
 | 服务端 → 网站 | `performance_alert` | TPS / 内存超阈值时（默认 30s 检查一次） |
 | 服务端 → 网站 | `player_advancements` | 定时（默认 10min）+ 认证后立即一次 |
 
@@ -267,7 +268,7 @@
 
 ---
 
-## 11. `player_stats_batch`（默认 10 分钟）
+## 11. `player_stats_batch`（默认 10 分钟 + 认证后立即一次）
 
 ```json
 {
@@ -297,7 +298,8 @@
 
 | 字段 | 来源 |
 | --- | --- |
-| `playtime_seconds` | 自行按 join/quit 累计并持久化（不用原版 `play_time`，1.21+ 不可靠） |
+| `playtime_seconds` | 自行按 join/quit 累计并持久化（不用原版 `play_time`，1.21+ 不可靠）。**读取时必须把「当前会话」也算进去**，否则在线玩家永远是上一次退出时的值（首次进服恒为 0） |
+| `blocks_placed` / `blocks_broken` / `achievements_count` | 事件累加。会话内的增量必须**定期**并入累计值（默认 30 秒），不能攒到玩家退出才写 |
 | `deaths` / `kills` / `distance_walked` | 原版统计（`deaths` / `mob_kills`+`player_kills` / `walk_one_cm`） |
 | `blocks_placed` | **原版没有此统计**，由事件累加 |
 | `blocks_broken` | 事件累加 |
@@ -365,7 +367,7 @@
 ## 14. 离线缓冲与补发
 
 - 网站断线期间，推送消息写入本地队列（上限 1000 条，超出丢弃最旧的），**持久化到 SQLite**。
-- 认证成功后自动补发全部缓冲消息，随后立即推送一次最新 `server_stats`。
+- 认证成功后自动补发全部缓冲消息，随后立即推送一次基准快照：`server_stats` + `player_advancements`（全量）+ `player_stats_batch`。
 - 队列长度可通过 `/vwl status` 查看。
 
 ---
@@ -434,7 +436,7 @@ debug: false
 | 命令 | Paper | 模组 | 说明 |
 | --- | --- | --- | --- |
 | `/vwl status` | ✅ | ✅ | 连接状态与待发队列长度 |
-| `/vwl stats` | ✅ | ✅ | 立即推送一次 `server_stats` |
+| `/vwl stats` | ✅ | ✅ | 立即推送一次全量快照：`server_stats` / `world_stats` / `player_stats_batch` / `player_advancements` |
 | `/vwl whitelist add\|remove <玩家>` | ✅ | ✅ | 手动增删白名单 |
 | `/vwl reload` | ✅ | ✅ | 重载配置并重启 WebSocket |
 

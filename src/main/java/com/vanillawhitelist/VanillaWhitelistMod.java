@@ -297,9 +297,15 @@ public class VanillaWhitelistMod implements ModInitializer {
 						ctx.getSource().sendFailure(Component.literal("[VWL] WebSocket 未启动"));
 						return 0;
 					}
+					// 推一次「全量快照」：四条都是当前状态，不含历史事件。
+					// 命令跑在服务端线程，直接读玩家/世界是安全的。
 					MinecraftServer srv = ctx.getSource().getServer();
 					transport.push(StatsCollector.serverStats(srv, config).toString());
-					ctx.getSource().sendSuccess(() -> Component.literal("[VWL] 已推送一次 server_stats"), false);
+					transport.push(StatsCollector.worldStats(srv, config).toString());
+					transport.push(StatsCollector.playerStatsBatch(srv, config).toString());
+					transport.push(StatsCollector.playerAdvancements(srv, config, false).toString());
+					ctx.getSource().sendSuccess(() -> Component.literal(
+						"[VWL] 已推送全量快照：server_stats / world_stats / player_stats_batch / player_advancements"), false);
 					return 1;
 				}))
 				.then(Commands.literal("reload").executes(ctx -> reload(ctx.getSource())))

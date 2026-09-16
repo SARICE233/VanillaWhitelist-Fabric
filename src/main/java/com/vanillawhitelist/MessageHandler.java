@@ -77,6 +77,9 @@ public class MessageHandler {
 				t.push(StatsCollector.serverStats(srv, config).toString());
 				// 给一份完整的成就明细作基准
 				t.push(StatsCollector.playerAdvancements(srv, config, false).toString());
+				// 再补一份玩家统计基准：定时推送默认 600 秒一次，认证时不补的话
+				// 网站会长时间停在空的玩家数据上。切回服务端线程再读，避免跨线程访问玩家。
+				srv.execute(() -> t.push(StatsCollector.playerStatsBatch(srv, config).toString()));
 			}
 		} else {
 			VanillaWhitelistMod.LOGGER.warn("[VWL] 认证失败，断开连接");

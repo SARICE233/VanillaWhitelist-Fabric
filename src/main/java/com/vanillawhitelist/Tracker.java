@@ -38,8 +38,25 @@ public class Tracker {
 		DIRTY.add(key);
 	}
 
+	/**
+	 * 把在线会话里累计的增量并入总数，并清零会话计数器。
+	 * 只在服务端线程调用（方块/成就事件与定时 flush 都跑在服务端线程）。
+	 */
+	private static void syncSessions() {
+		for (Map.Entry<UUID, long[]> e : SESSION.entrySet()) {
+			UUID id = e.getKey();
+			long[] s = e.getValue();
+			if (s[0] != 0L) { add(pkey(id, "blocks_placed"), s[0]); s[0] = 0L; }
+			if (s[1] != 0L) { add(pkey(id, "blocks_broken"), s[1]); s[1] = 0L; }
+			if (s[2] != 0L) { add(pkey(id, "advancements"), s[2]); s[2] = 0L; }
+		}
+	}
+
 	/** 把脏数据批量写回数据库 */
 	public static void flush() {
+		// 先把在线会话的增量并入总数：Paper 版每 30 秒就把增量落库，
+		// 这里此前只在玩家退出时才并入，导致在线玩家的方块/成就数恒为 0。
+		syncSessions();
 		if (db == null || !db.isReady() || DIRTY.isEmpty()) return;
 		Map<String, Long> batch = new HashMap<>();
 		for (String k : new ArrayList<>(DIRTY)) {
@@ -112,7 +129,17 @@ public class Tracker {
 
 	// ---------- 读取 ----------
 
-	public static long playtime(UUID id) { return total(pkey(id, "playtime")); }
+	/**
+	 * 玩家累计在线时长（秒），**包含当前会话**。
+	 * Paper 版是「已落库累计 + 当前会话」，这里此前只返回已落库的值，
+	 * 导致在线玩家（尤其首次进服的）在线时长恒为 0。
+	 */
+	public static long playtime(UUID id) {
+		long cumulative = total(pkey(id, "playtime"));
+		Long join = JOIN_TIMES.get(id);
+		if (join == null) return cumulative;
+		return cumulative + Math.max(0L, (System.currentTimeMillis() - join) / 1000L);
+	}
 	public static long blocksPlaced(UUID id) { return total(pkey(id, "blocks_placed")); }
 	public static long blocksBroken(UUID id) { return total(pkey(id, "blocks_broken")); }
 	public static long advancements(UUID id) { return total(pkey(id, "advancements")); }
