@@ -56,13 +56,19 @@ public class WsClient implements Transport, Peer {
 
 	private void loop() {
 		while (running) {
+			String reason = null;
 			try {
-				runOnce();
+				reason = runOnce();
 			} catch (Exception e) {
 				if (running) VanillaWhitelistMod.LOGGER.info("[VWL] 出站连接中断: {}", e.toString());
 			}
 			cleanup();
 			if (!running) break;
+			// 远端正常关闭（EOF / 关闭帧）以前是静默的，日志里只剩"连上了"，
+			// 根本看不出是谁先断的 —— 这里必须把原因打出来
+			if (reason != null) {
+				VanillaWhitelistMod.LOGGER.info("[VWL] 与网站的连接已断开：{}（{} ms 后重连）", reason, backoffMs);
+			}
 			try {
 				Thread.sleep(backoffMs);
 			} catch (InterruptedException ie) {
@@ -72,7 +78,7 @@ public class WsClient implements Transport, Peer {
 		}
 	}
 
-	private void runOnce() throws Exception {
+	private String runOnce() throws Exception {
 		URI uri = URI.create(config.url);
 		String scheme = uri.getScheme() == null ? "ws" : uri.getScheme().toLowerCase();
 		String host = uri.getHost();
@@ -138,18 +144,49 @@ public class WsClient implements Transport, Peer {
 		sendText(auth.toString());
 
 		// ── 读循环 ──
-		s.setSoTimeout(0);
+		// 出站侧必须自己保活：网站的连接空闲超时很激进（实测约 10 秒就会把空闲连接切断），
+		// 而本端的定时推送间隔默认 30 秒，服务器空置暂停后更是完全停摆。
+		// 这里用 WebSocket ping 帧（opcode 0x9）当心跳：合规的 WS 服务端都会自动回 pong，
+		// 网站端不需要改任何协议解析。
+		int keepAliveMs = Math.min(300, Math.max(2, config.keepAliveSeconds)) * 1000;
+		long silenceLimitMs = Math.max(30_000L, keepAliveMs * 6L);
+		long lastInbound = System.currentTimeMillis();
+		s.setSoTimeout(keepAliveMs);
 		while (running) {
-			WebSocket.Frame f = WebSocket.readFrame(in);
-			if (f == null) break;
+			WebSocket.Frame f;
+			try {
+				f = WebSocket.readFrame(in);
+			} catch (java.net.SocketTimeoutException te) {
+				// 空闲：只要对面还在回 pong 就不算死；彻底没动静才判定半开
+				if (System.currentTimeMillis() - lastInbound >= silenceLimitMs) {
+					return "网站连续 " + (silenceLimitMs / 1000) + " 秒没有任何响应（半开连接）";
+				}
+				writeFrame(0x9, new byte[0]);
+				continue;
+			}
+			if (f == null) {
+				return "网站关闭了连接（EOF，没有关闭帧）";
+			}
+			lastInbound = System.currentTimeMillis();
 			switch (f.opcode) {
 				case 0x1 -> handleText(new String(f.payload, StandardCharsets.UTF_8));
-				case 0x8 -> { return; }
+				case 0x8 -> { return "网站发送了关闭帧 " + describeClose(f); }
 				case 0x9 -> writeFrame(0xA, f.payload);
 				case 0xA -> { /* pong，忽略 */ }
 				default -> { }
 			}
 		}
+		return null;
+	}
+
+	/** 把关闭帧里的 code / reason 解出来，用于排查"到底是谁先断的" */
+	private static String describeClose(WebSocket.Frame f) {
+		if (f.payload.length < 2) return "(无 code)";
+		int code = ((f.payload[0] & 0xFF) << 8) | (f.payload[1] & 0xFF);
+		String reason = f.payload.length > 2
+				? new String(f.payload, 2, f.payload.length - 2, StandardCharsets.UTF_8)
+				: "";
+		return "code=" + code + (reason.isEmpty() ? "" : " reason=" + reason);
 	}
 
 	private void handleText(String json) {

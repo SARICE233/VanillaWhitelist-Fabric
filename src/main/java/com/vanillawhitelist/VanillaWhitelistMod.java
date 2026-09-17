@@ -155,9 +155,10 @@ public class VanillaWhitelistMod implements ModInitializer {
 					push(o.toString());
 				}
 			}
-			if (transport == null) return;
 			tick++;
+			// 先落库再判断传输层：/vwl off 关掉 WebSocket 后，统计仍要照常持久化
 			if (tick % 600L == 0L) Tracker.flush();
+			if (transport == null) return;
 			// 网站不在线时不采集定时快照：这些是「当前状态」而不是事件，
 			// 缓存下来只会让网站重连后收到一批过期遥测（与 Paper 行为对齐）。
 			// 事件类消息（join/leave/death/advancement/dimension_change）不受影响，照常入队。
@@ -208,6 +209,64 @@ public class VanillaWhitelistMod implements ModInitializer {
 		}
 		startHeartbeat();
 	}
+
+		/**
+		 * 关掉传输层：先把引用摘掉再停连接，避免停机过程中还有推送被塞进队列。
+		 */
+		private static void stopTransport() {
+			Transport t = transport;
+			transport = null;
+			stopHeartbeat();
+			if (handler != null) handler.setTransport(null);
+			if (t != null) t.stop();
+		}
+
+		/**
+		 * 运行时总开关：/vwl on 与 /vwl off。
+		 * 关掉 = 断开与网站的连接、停止一切推送、白名单指令通道不可用；
+		 * 事件与统计仍照常采集落库，网站重连后由认证时的基准快照补齐。状态会写回配置文件。
+		 */
+		private static int setEnabled(CommandSourceStack src, boolean enable) {
+			if (config == null) {
+				src.sendFailure(Component.literal("[VWL] 模组尚未初始化完成"));
+				return 0;
+			}
+			if (config.enabled == enable) {
+				src.sendSuccess(() -> Component.literal("[VWL] WebSocket 服务已经是" + (enable ? "开启" : "关闭") + "状态"), false);
+				return 1;
+			}
+			if (enable) {
+				if (!checkSecret()) {
+					src.sendFailure(Component.literal("[VWL] 密钥不合格（为空 / 仍是默认值 / 短于 16 字符），未开启"));
+					return 0;
+				}
+				if (checkPortConflict(src.getServer())) {
+					src.sendFailure(Component.literal("[VWL] WebSocket 端口与游戏端口冲突，未开启"));
+					return 0;
+				}
+				if (handler == null) {
+					handler = new MessageHandler(config);
+					handler.setServer(src.getServer());
+				}
+				config.enabled = true;
+				startTransport();
+				persistConfig(src);
+				src.sendSuccess(() -> Component.literal("[VWL] 已开启 WebSocket 服务，网站重连后即可收到数据"), true);
+			} else {
+				config.enabled = false;
+				stopTransport();
+				persistConfig(src);
+				src.sendSuccess(() -> Component.literal("[VWL] 已关闭 WebSocket 服务（连接已断开、推送已停止；统计仍照常落库）"), true);
+			}
+			return 1;
+		}
+
+		/** 把开关状态写回配置文件，使其重启后仍然生效 */
+		private static void persistConfig(CommandSourceStack src) {
+			if (!VwlConfig.save(FabricLoader.getInstance().getConfigDir(), config)) {
+				src.sendFailure(Component.literal("[VWL] 配置写回失败，本次开关不会保留到重启后"));
+			}
+		}
 
 	/**
 	 * 空服暂停兜底心跳。
@@ -281,6 +340,11 @@ public class VanillaWhitelistMod implements ModInitializer {
 		return true;
 	}
 
+	/** 总开关的当前状态文本，供 /vwl status 显示 */
+	private static String switchText() {
+		return (config != null && config.enabled) ? "已开启" : "已关闭";
+	}
+
 	private static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
 		dispatcher.register(Commands.literal("vwl")
 				.requires(Commands.hasPermission(Commands.LEVEL_ADMINS))
@@ -289,9 +353,12 @@ public class VanillaWhitelistMod implements ModInitializer {
 					ctx.getSource().sendSuccess(() -> Component.literal(
 							"[VWL] 模式: " + mode
 									+ " | 网站已连接: " + isClientConnected()
+									+ " | 服务: " + switchText()
 									+ " | 待发队列: " + (dbInstance != null ? dbInstance.queueSize() : 0)), false);
 					return 1;
 				}))
+				.then(Commands.literal("on").executes(ctx -> setEnabled(ctx.getSource(), true)))
+				.then(Commands.literal("off").executes(ctx -> setEnabled(ctx.getSource(), false)))
 				.then(Commands.literal("stats").executes(ctx -> {
 					if (config == null || transport == null) {
 						ctx.getSource().sendFailure(Component.literal("[VWL] WebSocket 未启动"));
@@ -332,12 +399,10 @@ public class VanillaWhitelistMod implements ModInitializer {
 
 	private static int reload(CommandSourceStack src) {
 		VwlConfig fresh = VwlConfig.load(FabricLoader.getInstance().getConfigDir());
-		if (transport != null) {
-			transport.stop();
-			transport = null;
-		}
+		stopTransport();
 		config = fresh;
-		if (handler == null) handler = new MessageHandler(config);
+		// 必须重建 handler：它持有的是旧 config 的引用，改了 secret 后不重建会继续用旧密钥认证
+		handler = new MessageHandler(config);
 		handler.setServer(src.getServer());
 		if (!config.enabled) {
 			src.sendSuccess(() -> Component.literal("[VWL] 配置已重载（WebSocket 已禁用）"), false);

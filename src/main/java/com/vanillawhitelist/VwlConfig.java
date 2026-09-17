@@ -30,6 +30,12 @@ public class VwlConfig {
 	public boolean enabled = true;
 	public String serverId = "main";
 	public int pushIntervalSeconds = 30;
+	/**
+	 * 出站模式（mode=client）下的保活间隔（秒）。
+	 * 本端按这个间隔发 WebSocket ping 帧，必须**明显小于**网站的连接空闲超时，
+	 * 否则网站会把"太久没收到数据"的连接切断，表现为连上几秒就重连一次。
+	 */
+	public int keepAliveSeconds = 5;
 	public int worldStatsIntervalSeconds = 300;
 	public int playerStatsIntervalSeconds = 600;
 	public boolean debug = false;
@@ -55,6 +61,25 @@ public class VwlConfig {
 		return secret != null && !secret.isBlank()
 				&& !secret.equals(DEFAULT_SECRET)
 				&& secret.length() >= 16;
+	}
+
+	/**
+	 * 把配置写回 config/vanillawhitelist.json。
+	 * 供运行时开关（/vwl on|off）使用，保证「指令切换」与「手改配置」是同一份真相。
+	 * @return 是否写入成功
+	 */
+	public static boolean save(Path dir, VwlConfig cfg) {
+		Path file = dir.resolve("vanillawhitelist.json");
+		try {
+			Files.createDirectories(dir);
+			try (Writer w = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+				GSON.toJson(cfg, w);
+			}
+			return true;
+		} catch (Exception e) {
+			VanillaWhitelistMod.LOGGER.error("[VWL] 配置写入失败", e);
+			return false;
+		}
 	}
 
 	public static VwlConfig load(Path dir) {

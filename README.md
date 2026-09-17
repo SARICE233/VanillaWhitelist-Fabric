@@ -46,7 +46,8 @@ mod 元数据里已声明 `"environment": "server"`，客户端不会加载它�
 | 🔨 远程白名单管理 | 网站可添加/移除白名单，写入真实的白名单数据 |
 | 💾 SQLite 持久化 | 累计数据跨重启保留，**不随换世界/换档清零** |
 | 📥 离线缓冲 | 网站断线期间消息入队，重连后自动补发 |
-| ⌨️ 管理命令 | `/vwl status` `/vwl stats` `/vwl whitelist add|remove` `/vwl reload` |
+| ⌨️ 管理命令 | `/vwl status` `/vwl on` `/vwl off` `/vwl stats` `/vwl whitelist add|remove` `/vwl reload` |
+| 🔌 运行时总开关 | `/vwl on` / `/vwl off` 随时开关整个 WebSocket 服务，状态写回配置文件 |
 
 ---
 
@@ -86,6 +87,7 @@ mod 元数据里已声明 `"environment": "server"`，客户端不会加载它�
   "pushIntervalSeconds": 30,
   "worldStatsIntervalSeconds": 300,
   "playerStatsIntervalSeconds": 600,
+  "keepAliveSeconds": 5,
   "alertsEnabled": true,
   "tpsWarning": 15.0,
   "tpsCritical": 10.0,
@@ -95,6 +97,16 @@ mod 元数据里已声明 `"environment": "server"`，客户端不会加载它�
   "debug": false
 }
 ```
+
+### 出站模式（`mode = client`）的保活
+
+出站模式下服务端会**自己发 WebSocket ping 帧保活**，间隔由 `keepAliveSeconds` 控制（默认 **5 秒**）。
+
+为什么需要它：服务端的定时推送间隔默认 30 秒，服务器空置暂停（`pause-when-empty-seconds`，MC 默认 60 秒）后更是一条都不发，而网站侧的连接空闲超时通常只有十几秒 —— 结果就是"连上几秒被切、切完立刻重连"的反复闪断，网站会看到服务器不停上下线。
+
+所以 **`keepAliveSeconds` 必须明显小于网站的空闲超时**。用 WS ping 帧而不是应用层消息，是为了让任何合规的 WebSocket 服务端自动回 pong，**网站端不需要改任何协议解析**。
+
+> 顺带：日志里现在会写明**每次断开的原因**（`EOF` / `网站发送了关闭帧 code=…` / `半开连接`），排查"到底是谁先断的"不用再猜。
 
 ### ⚠️ 密钥强度要求
 
@@ -116,13 +128,18 @@ openssl rand -hex 24
 
 | 命令 | 说明 |
 | --- | --- |
-| `/vwl status` | 查看连接状态与待发队列长度 |
+| `/vwl status` | 查看模式、**总开关状态**、连接状态与待发队列长度 |
+| `/vwl on` | **开启** WebSocket 服务（断开状态 → 重新监听/重连；状态写回配置文件） |
+| `/vwl off` | **关闭** WebSocket 服务：断开与网站的连接、停止一切推送、白名单指令通道不可用；统计仍照常采集落库 |
 | `/vwl stats` | 立即推送一次全量快照：`server_stats` / `world_stats` / `player_stats_batch` / `player_advancements` |
 | `/vwl whitelist add <玩家>` | 手动添加白名单 |
 | `/vwl whitelist remove <玩家>` | 手动移除白名单 |
 | `/vwl reload` | 重载配置并重启 WebSocket 服务 |
 
 以上均要求管理员权限。
+
+> `/vwl on` / `/vwl off` 就是配置项 `enabled` 的运行时开关，会把结果**写回 `config/vanillawhitelist.json`**，因此重启后仍然有效。
+> 开启时会重新校验密钥强度与端口冲突：密钥不合格（为空 / 仍是出厂默认值 / 短于 16 字符）或端口与游戏端口相同，都会**拒绝开启**并提示原因。
 
 ---
 

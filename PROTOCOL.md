@@ -160,6 +160,18 @@
 网站每 15 秒发一次 ping；10 秒未收到 pong 则主动断开。
 服务端侧也做半开连接检测：30 秒无任何数据则发一次 WebSocket ping 探测，再 30 秒无响应即断开。
 
+### 出站模式（`mode=client`）下的额外保活
+
+入站模式下由网站按上面的节奏发 ping，服务端只需被动回 pong；**出站模式不能只靠这个** ——
+服务端的定时推送间隔默认 30 秒，服务器空置暂停（`pause-when-empty-seconds`）后更是一条都不发，
+而网站侧的连接空闲超时通常远小于 30 秒，结果就是"连上几秒就被切、切完立刻重连"的反复闪断。
+
+因此出站模式下，**服务端会自己发 WebSocket ping 帧（opcode 0x9）保活**：
+
+- 间隔由配置项 `keepAliveSeconds` 控制，默认 **5 秒**，必须明显小于网站的空闲超时；
+- 用 WS ping 帧而不是应用层 `ping` 消息，是为了让任何合规的 WebSocket 服务端自动回 pong，**网站端不需要改任何协议解析**；
+- 连上后若连续 30 秒没收到**任何**帧（连 pong 都没有），判定为半开连接并重连。
+
 ---
 
 ## 7. 白名单操作
@@ -410,6 +422,7 @@ debug: false
   "pushIntervalSeconds": 30,
   "worldStatsIntervalSeconds": 300,
   "playerStatsIntervalSeconds": 600,
+  "keepAliveSeconds": 5,
   "alertsEnabled": true,
   "tpsWarning": 15.0,
   "tpsCritical": 10.0,
